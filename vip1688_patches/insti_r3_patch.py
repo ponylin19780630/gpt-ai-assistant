@@ -271,8 +271,9 @@ def main():
     a = sys.argv[1:]
     src = os.path.expanduser(a[a.index("--src") + 1] if "--src" in a else "~/vip1688_r13b_20261012_024917/source")
     app, ins = os.path.join(src, "app.py"), os.path.join(src, "insti_query_r1.py")
+    app_sha = a[a.index("--app-sha") + 1] if "--app-sha" in a else APP_SHA
     if "--no-net" not in a:
-        need(sha(open(app, "rb").read()) == APP_SHA, "app.py SHA 不符（正式版已變更）")
+        need(sha(open(app, "rb").read()) == app_sha, "app.py SHA 不符（正式版已變更）")
     t = open(ins, "rb").read()
     need(sha(t) == SRC_SHA, "insti_query_r1.py SHA 不符")
     t = t.decode("utf-8")
@@ -280,6 +281,9 @@ def main():
     new = t.replace(ANCHOR, INJECT + ANCHOR, 1)
     compile(new, "insti_query_r1.py", "exec")
     cand = os.path.expanduser(f"~/insti_r3_{time.strftime('%Y%m%d_%H%M%S')}/source") if "--no-net" not in a else src + "_r3"
+    if "--cand" in a:
+        cand = a[a.index("--cand") + 1]
+        need(not os.path.exists(cand), "候選目錄已存在")
     os.makedirs(os.path.dirname(cand), exist_ok=True)
     subprocess.run(["cp", "-al", src, cand], check=True)
     tmp = os.path.join(cand, ".insti_r3.tmp")
