@@ -50,7 +50,7 @@ try:
                         break
                 data = {"hist": ([(snap.day, day0)] + hist[1:]) if day0 else None, "day": snap.day,
                         "shares": shares, "stars": stars, "stars_ok": len(stars) >= 60,
-                        "ok": bool(day0) and len(stars) >= 60,
+                        "ok": bool(day0) and len(stars) >= 60 and not ((getattr(_rkr3_q, "_R3_SHARES", {}) or {}).get("fail")),
                         "why": "" if day0 else "當日全市場法人資料暫缺"}
                 print(f"[RK_R3_DATA] day={snap.day} days={len(hist)} day0_rows={len(day0 or {})} "
                       f"shares={len(shares)} stars={len(stars)} ms={int((_rkr3_time.monotonic() - t0) * 1000)}", flush=True)

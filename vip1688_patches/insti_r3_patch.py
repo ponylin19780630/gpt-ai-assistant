@@ -10,7 +10,7 @@ SRC_SHA = "28185d5967406ce879f635bd613a9211770f02be0fb2daa40cf4a7593d325b2b"
 ANCHOR = '\nif __name__ == "__main__":\n'
 INJECT = r'''
 # ===== INSTI_R3：外本比／投本比（當日｜近5日累計）＋趨勢 =====
-_R3_SHARES = {"day": None, "data": {}, "mkt": {}}
+_R3_SHARES = {"day": None, "data": {}, "mkt": {}, "fail": set()}
 _R3_STAR = {"day": None, "set": set(), "top": {}}
 _R3_DAYS = {}
 _R3_PREV = {}
@@ -19,12 +19,25 @@ _R3_DARK = {1: "#FF7A7A", -1: "#5FD38D", 0: "#F5C518", None: "#9A9A9A", "L": "#B
 _R3_LIGHT = {1: "#B3261E", -1: "#1B6B3A", 0: "#7A5C00", None: "#5F5F5F", "L": "#504C46"}
 
 
+def _r3_json(url, tries=2):
+    """官方 OpenAPI 讀取；斷線/逾時重試（R3f）。"""
+    last = None
+    for k in range(tries):
+        try:
+            return _requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).json()
+        except Exception as exc:
+            last = exc
+            print(f"[INSTI_R3_HTTP_RETRY] {url.rsplit('/', 1)[-1]} try={k + 1} {type(exc).__name__}", flush=True)
+            time.sleep(1.5)
+    raise last
+
+
 def _r3_shares():
     """官方發行股數（股）：TWSE t187ap03_L＋TPEx mopsfin_t187ap03_O，台北同日快取。"""
     day = dt.datetime.now(TAIPEI).date()
     if _R3_SHARES["day"] == day and _R3_SHARES["data"]:
         return _R3_SHARES["data"]
-    out, mkt = {}, {}
+    out, mkt, fail = {}, {}, set()
     for url, ck, sk, mk in (
         ("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "公司代號",
          "已發行普通股數或TDR原股發行股數", "上市"),
@@ -33,8 +46,7 @@ def _r3_shares():
     ):
         name = url.rsplit("/", 1)[-1]
         try:
-            rows = _requests.get(url, headers={"User-Agent": "Mozilla/5.0"},
-                                 timeout=15).json()
+            rows = _r3_json(url)
             n = 0
             for r in rows if isinstance(rows, list) else []:
                 k = ({str(a).strip(): v for a, v in r.items()}
@@ -49,11 +61,14 @@ def _r3_shares():
                     mkt[code] = mk
                     n += 1
             print(f"[INSTI_R3_SHARES] src={name} n={n}", flush=True)
+            if n == 0:
+                fail.add(mk)
         except Exception as exc:
+            fail.add(mk)
             print(f"[INSTI_R3_SHARES_ERR] src={name} {type(exc).__name__}: "
                   f"{str(exc)[:100]}", flush=True)
-    if out:
-        _R3_SHARES.update(day=day, data=out, mkt=mkt)
+    # 任一市場失敗就不快取（下次重抓），並記錄失敗市場供「資料不足」如實說明。
+    _R3_SHARES.update(day=None if fail else day, data=out, mkt=mkt, fail=fail)
     return out
 
 
@@ -67,8 +82,7 @@ def _r3_star_set(shares):
                 "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"):
         name = url.rsplit("/", 1)[-1]
         try:
-            rows = _requests.get(url, headers={"User-Agent": "Mozilla/5.0"},
-                                 timeout=15).json()
+            rows = _r3_json(url)
             n = 0
             for r in rows if isinstance(rows, list) else []:
                 k = ({str(a).strip(): v for a, v in r.items()}
@@ -167,7 +181,9 @@ def _r3_pct(v):
 def _r3_lines(code, hist, issued):
     """回傳 [(純文字, [(片段, 方向)])]；每個數值依自身正負上色：1紅 -1綠 0黃 None灰 L中性。"""
     if not issued:
-        t = "外本比／投本比：資料不足（官方無發行股數，如ETF）"
+        fail = _R3_SHARES.get("fail") or set()
+        t = ("外本比／投本比：資料不足（官方無發行股數，如ETF）" if not fail else
+             f"外本比／投本比：資料不足（{'、'.join(sorted(fail))}官方發行股數來源暫缺，或為ETF）")
         return [(t, [(t, None)])]
     n = len(hist)
     out = []
@@ -264,7 +280,9 @@ def _r3_inject(snapshot, out):
     note += ("\n★權值股＝上市市值前50＋上櫃市值前10（發行股數×最近收盤價）"
              if stars else "\n★權值股：官方收盤價暫缺，本次未標")
     if miss:
-        note += (f"\n無官方發行股數 {len(miss)} 檔（如ETF，標資料不足）："
+        fl = _R3_SHARES.get("fail") or set()
+        note += ((f"\n{'、'.join(sorted(fl))}官方發行股數來源暫缺，{len(miss)} 檔標資料不足："
+                  if fl else f"\n無官方發行股數 {len(miss)} 檔（如ETF，標資料不足）：")
                  + "、".join(miss[:10]) + ("…" if len(miss) > 10 else ""))
     if out and out[0].get("type") == "text":
         key = "\n籌碼紀錄不代表未來漲跌"
