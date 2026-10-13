@@ -10,7 +10,8 @@ SRC_SHA = "28185d5967406ce879f635bd613a9211770f02be0fb2daa40cf4a7593d325b2b"
 ANCHOR = '\nif __name__ == "__main__":\n'
 INJECT = r'''
 # ===== INSTI_R3：外本比／投本比（當日｜近5日累計）＋趨勢 =====
-_R3_SHARES = {"day": None, "data": {}}
+_R3_SHARES = {"day": None, "data": {}, "mkt": {}}
+_R3_STAR = {"day": None, "set": set(), "top": {}}
 _R3_DAYS = {}
 _R3_PREV = {}
 _R3_LOCK = threading.Lock()
@@ -23,12 +24,12 @@ def _r3_shares():
     day = dt.datetime.now(TAIPEI).date()
     if _R3_SHARES["day"] == day and _R3_SHARES["data"]:
         return _R3_SHARES["data"]
-    out = {}
-    for url, ck, sk in (
+    out, mkt = {}, {}
+    for url, ck, sk, mk in (
         ("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "公司代號",
-         "已發行普通股數或TDR原股發行股數"),
+         "已發行普通股數或TDR原股發行股數", "上市"),
         ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
-         "SecuritiesCompanyCode", "IssueShares"),
+         "SecuritiesCompanyCode", "IssueShares", "上櫃"),
     ):
         name = url.rsplit("/", 1)[-1]
         try:
@@ -45,14 +46,57 @@ def _r3_shares():
                 code = str(k.get(ck, "")).strip()
                 if code and v > 0:
                     out[code] = v
+                    mkt[code] = mk
                     n += 1
             print(f"[INSTI_R3_SHARES] src={name} n={n}", flush=True)
         except Exception as exc:
             print(f"[INSTI_R3_SHARES_ERR] src={name} {type(exc).__name__}: "
                   f"{str(exc)[:100]}", flush=True)
     if out:
-        _R3_SHARES.update(day=day, data=out)
+        _R3_SHARES.update(day=day, data=out, mkt=mkt)
     return out
+
+
+def _r3_star_set(shares):
+    """★權值股＝上市市值前50＋上櫃市值前10（官方發行股數×官方最近收盤價），台北同日快取。"""
+    day = dt.datetime.now(TAIPEI).date()
+    if _R3_STAR["day"] == day and _R3_STAR["set"]:
+        return _R3_STAR["set"]
+    mkt, price = _R3_SHARES.get("mkt") or {}, {}
+    for url in ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+                "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"):
+        name = url.rsplit("/", 1)[-1]
+        try:
+            rows = _requests.get(url, headers={"User-Agent": "Mozilla/5.0"},
+                                 timeout=15).json()
+            n = 0
+            for r in rows if isinstance(rows, list) else []:
+                k = ({str(a).strip(): v for a, v in r.items()}
+                     if isinstance(r, dict) else {})
+                code = str(k.get("Code") or k.get("SecuritiesCompanyCode") or "").strip()
+                try:
+                    p = float(Decimal(str(k.get("ClosingPrice", k.get("Close", ""))).replace(",", "").strip()))
+                except (InvalidOperation, ValueError):
+                    continue
+                if code and p > 0:
+                    price[code] = p
+                    n += 1
+            print(f"[INSTI_R3_PRICE] src={name} n={n}", flush=True)
+        except Exception as exc:
+            print(f"[INSTI_R3_PRICE_ERR] src={name} {type(exc).__name__}: "
+                  f"{str(exc)[:100]}", flush=True)
+    caps = {}
+    for code, sh in shares.items():
+        if code in price and code in mkt:
+            caps.setdefault(mkt[code], []).append((sh * price[code], code))
+    top = {m: [c for _, c in sorted(v, reverse=True)[:50 if m == "上市" else 10]]
+           for m, v in caps.items()}
+    stars = set(top.get("上市", [])) | set(top.get("上櫃", []))
+    print(f"[INSTI_R3_STAR] 上市={len(top.get('上市', []))} 上櫃={len(top.get('上櫃', []))} "
+          f"上市前5={top.get('上市', [])[:5]} 上櫃前5={top.get('上櫃', [])[:5]}", flush=True)
+    if len(top.get("上市", [])) == 50 and len(top.get("上櫃", [])) == 10:
+        _R3_STAR.update(day=day, set=stars, top=top)
+    return stars
 
 
 def _r3_day_rows(day, deadline):
@@ -157,6 +201,11 @@ def _r3_inject(snapshot, out):
     t0 = time.monotonic()
     hist = _r3_history(snapshot)
     shares = _r3_shares()
+    try:
+        stars = _r3_star_set(shares)
+    except Exception as exc:
+        stars = set()
+        print(f"[INSTI_R3_STAR_ERR] {type(exc).__name__}: {str(exc)[:120]}", flush=True)
     quotes = dict(snapshot.quotes)
     buy, sell = snapshot.buy[:REPORT_LIMIT], snapshot.sell[:REPORT_LIMIT]
     starts = {"三者同買": 0, "三者同賣": 0}
@@ -173,6 +222,14 @@ def _r3_inject(snapshot, out):
                                  rows[starts[label]:starts[label] + 6]):
                 quote = quotes.get((row[0], row[1]))
                 pal = _R3_LIGHT if (quote and quote.highlight) else _R3_DARK
+                title = card["contents"][0]
+                if row[1] in stars and title.get("type") == "text":
+                    keep = {k: title[k] for k in ("size", "weight") if k in title}
+                    title["contents"] = [
+                        dict(type="span", text=title.get("text", ""),
+                             color=title.get("color", "#F5F1E8"), **keep),
+                        dict(type="span", text=" ★",
+                             color="#B8860B" if pal is _R3_LIGHT else "#FFD700", **keep)]
                 issued = shares.get(row[1])
                 if not issued:
                     miss.append(row[1])
@@ -204,6 +261,8 @@ def _r3_inject(snapshot, out):
     note = (f"\n外本比／投本比＝外資／投信買賣超÷發行股數×100%"
             f"\n格式：當日｜近{len(days)}日累計｜趨勢（連買/連賣N日、轉買/轉賣）"
             f"\n累計區間：{days[-1]:%m/%d}～{days[0]:%m/%d}；數值與趨勢字色：紅正/買・綠負/賣・黃0・灰缺")
+    note += ("\n★權值股＝上市市值前50＋上櫃市值前10（發行股數×最近收盤價）"
+             if stars else "\n★權值股：官方收盤價暫缺，本次未標")
     if miss:
         note += (f"\n無官方發行股數 {len(miss)} 檔（如ETF，標資料不足）："
                  + "、".join(miss[:10]) + ("…" if len(miss) > 10 else ""))
@@ -242,6 +301,8 @@ def strip(o):
     for m in o[1:]:
         for b in m["contents"]["contents"]:
             for c in b["body"]["contents"]:
+                if (c["contents"][0].get("contents") or [{}])[-1].get("text") == " ★":
+                    c["contents"][0].pop("contents")
                 c["contents"] = [x for x in c["contents"] if not (x.get("type") == "text" and str(x.get("text") or (x.get("contents") or [{}])[0].get("text", "")).startswith(("外本比", "投本比")))]
     o[0]["text"] = o[0]["text"].split("\n外本比／投本比＝")[0] + ("\n籌碼紀錄不代表未來漲跌，投資請審慎評估。" if "\n籌碼紀錄不代表" in o[0]["text"] else "")
     return o
@@ -260,6 +321,8 @@ print("SHARES_SAMPLE", {c: sh.get(c) for c in ("2330", "2317", "6488", "8299", "
 print("TOP3_ABS_FOREIGN_DAY_RATIO_BY_MARKET", mx)
 hist = q._r3_history(snap)
 print("HIST_DAYS", [str(d) for d, _ in hist])
+print("STAR_TOP", q._R3_STAR.get("top"))
+print("STAR_ON_CARDS", sorted(r[1] for r in list(snap.buy[:30]) + list(snap.sell[:30]) if r[1] in q._R3_STAR.get("set", set())))
 for r in [x for x in snap.buy[:3]] + [x for x in snap.sell[:3]]:
     print("ROW", r[0], r[1], r[2], "外", int(r[3] / 1000), "投", int(r[4] / 1000), "發行股", sh.get(r[1]), [x for x, _ in q._r3_lines(r[1], hist, sh.get(r[1]))])
 print("SUMMARY_TEXT_BEGIN"); print(out[0]["text"]); print("SUMMARY_TEXT_END")
