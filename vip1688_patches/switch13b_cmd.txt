@@ -1,0 +1,46 @@
+set +H
+echo "[開始]"
+export P=affable-gist-379402 R=asia-east1 CLOUDSDK_CORE_DISABLE_FILE_LOGGING=1
+NEW=stock-bot-vip1688-r13b OLD=stock-bot-vip1688-r13
+gcloud run revisions describe $NEW --project=$P --region=$R --format=json > /tmp/sw_rev.json
+RDY=$(python3 -I -c 'import json;c=json.load(open("/tmp/sw_rev.json"))["status"]["conditions"];print(next((x["status"] for x in c if x["type"]=="Ready"),"?"))')
+echo "R13b Ready=$RDY"
+if [ "$RDY" != "True" ]; then echo "STOP R13b 未就緒，未切流量"; else
+  gcloud run services update-traffic stock-bot --to-revisions $NEW=100 --project=$P --region=$R --quiet 2>&1 | tail -2
+  gcloud run services describe stock-bot --project=$P --region=$R --flatten=status.traffic --format='value(status.traffic.revisionName,status.traffic.percent)' | grep 100
+  cat > /tmp/sw_get.py <<'PYEOF'
+import json, os, subprocess, sys
+e = {x.get("name"): x for x in json.load(open("/tmp/sw_rev.json"))["spec"]["containers"][0].get("env", [])}
+x = e.get(sys.argv[1]) or sys.exit(3)
+if "value" in x:
+    print(x["value"])
+else:
+    r = x["valueFrom"]["secretKeyRef"]
+    print(subprocess.run(["gcloud", "secrets", "versions", "access", r.get("key", "latest"), "--secret", r["name"], "--project", os.environ["P"]], capture_output=True, text=True, check=True).stdout.strip())
+PYEOF
+  A=$(python3 -I -B /tmp/sw_get.py ADMIN_LINE_ID); S=$(python3 -I -B /tmp/sw_get.py CRON_SECRET); rm -f /tmp/sw_get.py
+  OK=0
+  if ! [[ "$A" =~ ^Ubccb[0-9a-f]{28}$ ]] || [ ${#S} -eq 0 ]; then echo "收件人/密鑰驗證未通過"; else
+    BODY=$(A="$A" python3 -I -c 'import json,os;print(json.dumps({"user_id":os.environ["A"],"prompt":"","mode":"REPORT_8888","flex_title":"💎 含金量最高發財1688精華報"},ensure_ascii=False))')
+    T0=$(date -u +%FT%TZ); echo "T0=$T0（正式網址驗證）"
+    printf 'X-Internal-Task-Secret: %s\n' "$S" | curl -s -m 900 -o /dev/null -w 'http=%{http_code} t=%{time_total}s\n' -H @- -H 'Content-Type: application/json; charset=utf-8' --data-binary "$BODY" https://stock-bot-orqaayzeaa-de.a.run.app/internal/run_task
+    sleep 15
+    LOGS=$(gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.revision_name=\"$NEW\" AND timestamp>=\"$T0\"" --project=$P --order=asc --limit=3000 --format='value(timestamp,textPayload)')
+    echo "$LOGS" | grep -E "EXECUTE_BEGIN|VIP1688_R13_FETCH|VIP1688_R11_TAKE|PUSH_OK|PUSH_NOT_OK|cache_hit|TOTAL_MS|Traceback" | sed -E "s/U[0-9a-f]{32}/U<ID>/g" | cut -c1-200
+    echo "$LOGS" | grep -q "VIP1688_R11_TAKE] hit" && echo "$LOGS" | grep -qE "PUSH_OK|\"ok\": true, \"message_type\": \"FlexSendMessage\"" && OK=1; unset LOGS BODY
+  fi
+  unset A S
+  if [ "$OK" = 1 ]; then
+    echo "--- 正式切換成功；清理測試 tag 與舊候選 ---"
+    TAGS=$(gcloud run services describe stock-bot --project=$P --region=$R --format=json | python3 -I -c 'import json,sys;print(",".join(t["tag"] for t in json.load(sys.stdin)["status"].get("traffic",[]) if str(t.get("tag","")).startswith("vip1688-")))')
+    echo "移除 tag: $TAGS"; [ -n "$TAGS" ] && gcloud run services update-traffic stock-bot --remove-tags "$TAGS" --project=$P --region=$R --quiet 2>&1 | tail -1
+    find "$HOME" -maxdepth 1 -type d -name "vip1688_r13_2026*" -exec rm -rf {} +
+    ls -d "$HOME"/vip1688_r13b_2026* "$HOME"/insti_line_r1_o7_ze2j6; df -h "$HOME" | tail -1
+  else
+    echo "驗證未通過，自動回滾到 R13"
+    gcloud run services update-traffic stock-bot --to-revisions $OLD=100 --project=$P --region=$R --quiet 2>&1 | tail -1
+  fi
+  gcloud run services describe stock-bot --project=$P --region=$R --flatten=status.traffic --format='value(status.traffic.revisionName,status.traffic.percent)' | grep -E "\s[1-9][0-9]*$"
+fi
+rm -f /tmp/sw_rev.json
+echo "[結束]"
