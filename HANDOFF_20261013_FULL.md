@@ -58,6 +58,8 @@ gcloud run services update-traffic stock-bot --to-revisions stock-bot-01296-xid=
 
 ## 2. 時間軸：對話、上傳檔案、圖表
 
+> 台北時間以使用者回貼訊息的時間為準；日誌裡的事件時間（UTC）會比訊息時間早幾分鐘。
+
 | 台北時間 | 事件 | 證據（檔案或輸出） |
 |---|---|---|
 | 08:51 | 使用者要求在三大法人模組加上外本比、投本比與趨勢分析 | — |
@@ -73,7 +75,7 @@ gcloud run services update-traffic stock-bot --to-revisions stock-bot-01296-xid=
 | 09:57 | fix8 原始碼比對失敗（JSON 格式、zip 檔）；5 份重複目錄已刪除（Home 剩餘從 257M 增加到 276M） | `fix8_check_20261013.txt` |
 | 10:15 | R3c：fix8 和 r13b 只差 3 個檔案（`app.py`、`fundamental_entry_r19.py`、`us_analysis_entry_r1.py`），insti 三個檔相同；部署 `insti-r3c` 並推播給管理者 | `insti_r3c_20261013.txt`＋**截圖 2 張** |
 | 10:16 | 截圖驗收：**整列依 5 日累計上色，負值也顯示紅色，違反顏色規則** → R3d（`52576b5`）改為逐值上色 | — |
-| 10:35 | R3d 部署並推播：同買 carousel 44,995 bytes；前台 PASS；使用者新增需求：權值股★ | `insti_r3d_20261013.txt`＋**截圖 2 張** |
+| 10:35 | R3d 部署並推播：同買 carousel 44,995 bytes；截圖逐項核對顏色正確（使用者沒有明說 PASS）；使用者新增需求：權值股★ | `insti_r3d_20261013.txt`＋**截圖 2 張** |
 | 10:36 | 使用者選擇★定義：上市前 50＋上櫃前 10 | AskUserQuestion |
 | 10:48 | R3e（`66aae38`）部署並推播：★ 上市 50、上櫃 10；carousel 47,197 bytes；前台 PASS | `insti_r3e_20261013.txt` |
 | 10:52 | 切換到 `insti-r3e`：正式網址 `PUSH_OK`；刪除 revision insti-r3b、r3c、r3d。使用者新任務：排行榜也要加 | `insti_r3e_switch_20261013.txt` |
@@ -263,7 +265,7 @@ gcloud run revisions list --service stock-bot --region asia-east1 --project affa
 ## 9. 本日工作成果自評（實事求是）
 
 **做到的：**
-- 三大法人、排行榜都加上外本比、投本比與趨勢，以及權值股★，**正式上線**，前台 PASS 共 4 次（R3d、R3e、rk-r3b、r3h）。
+- 三大法人、排行榜都加上外本比、投本比與趨勢，以及權值股★，**正式上線**。使用者明確回覆前台 PASS 2 次（R3e、r3h）；R3d、rk-r3b 由我依截圖逐項核對。
 - 上市＋上櫃都可以計算（1,988 檔）；缺資料的個股標灰色並寫明原因。
 - 原卡內容逐字不變，每一版都用 `ORIGINAL_UNCHANGED` 實測驗證；排行榜的選股、策略、按鈕都沒有動。
 - 每一版的流程都相同：先鎖定基底 SHA、用硬連結建候選目錄、真資料乾跑、部署到 0% 流量、只推給管理者、驗證通過才切換並附回滾、最後清理暫存。
