@@ -26,13 +26,13 @@ try:
         """10 分鐘快取；失敗也快取 2 分鐘，避免每張卡重試卡住推播。"""
         c = _RKR3_CACHE
         age = _rkr3_time.monotonic() - c["at"]
-        if c["data"] is not None and age < (600 if c["data"].get("hist") is not None else 120):
+        if c["data"] is not None and age < (600 if c["data"].get("ok") else 120):
             return c["data"]
         if not _RKR3_LOCK.acquire(timeout=25):
             return c["data"]
         try:
             age = _rkr3_time.monotonic() - c["at"]
-            if c["data"] is not None and age < (600 if c["data"].get("hist") is not None else 120):
+            if c["data"] is not None and age < (600 if c["data"].get("ok") else 120):
                 return c["data"]
             t0 = _rkr3_time.monotonic()
             try:
@@ -40,12 +40,18 @@ try:
                 hist = _rkr3_q._r3_history(snap, budget=20)
                 day0 = _rkr3_q._r3_day_rows(snap.day, _rkr3_time.monotonic() + 15)
                 shares = _rkr3_q._r3_shares()
-                try:
-                    stars = _rkr3_q._r3_star_set(shares)
-                except Exception:
-                    stars = set()
-                data = {"hist": ([(snap.day, day0)] + hist[1:]) if day0 else None,
-                        "shares": shares, "stars": stars, "why": "" if day0 else "當日全市場法人資料暫缺"}
+                stars = set()
+                for _try in range(2):
+                    try:
+                        stars = _rkr3_q._r3_star_set(shares)
+                    except Exception as exc:
+                        print(f"[RK_R3_STAR_ERR] {type(exc).__name__}: {str(exc)[:120]}", flush=True)
+                    if len(stars) >= 60:
+                        break
+                data = {"hist": ([(snap.day, day0)] + hist[1:]) if day0 else None, "day": snap.day,
+                        "shares": shares, "stars": stars, "stars_ok": len(stars) >= 60,
+                        "ok": bool(day0) and len(stars) >= 60,
+                        "why": "" if day0 else "當日全市場法人資料暫缺"}
                 print(f"[RK_R3_DATA] day={snap.day} days={len(hist)} day0_rows={len(day0 or {})} "
                       f"shares={len(shares)} stars={len(stars)} ms={int((_rkr3_time.monotonic() - t0) * 1000)}", flush=True)
             except Exception as exc:
@@ -111,6 +117,8 @@ try:
                 t = f"外本比／投本比：資料不足（{data.get('why') or '官方法人資料逾時'}）"
                 lines = [(t, [(t, None)])]
             new = [_rkr3_line(parts, pal) for _t, parts in lines]
+            if data.get("hist") is not None and data.get("day") and len(lines[0][1]) > 1:
+                new[0]["contents"].insert(0, {"type": "span", "text": f"法人{data['day']:%m/%d}｜", "color": pal["L"]})
             if code in (data.get("stars") or set()):
                 gold = "#FFD700" if pal is _rkr3_q._R3_DARK else "#B8860B"
                 if not _rkr3_star(bubble, code, gold):
@@ -126,9 +134,16 @@ try:
             body = (bubble or {}).get("body") or {}
             if isinstance(body.get("contents"), list):
                 pal = _rkr3_q._R3_DARK if _rkr3_dark(bubble) else _rkr3_q._R3_LIGHT
+                data = _rkr3_data() or {}
+                day = f"法人資料日 {data['day']:%m/%d}（官方最新完整報表）｜" if data.get("day") else "法人資料暫缺｜"
+                mkt = (getattr(_rkr3_q, "_R3_SHARES", {}) or {}).get("mkt") or {}
+                st = data.get("stars") or set()
+                tw, tp = sum(mkt.get(c) == "上市" for c in st), sum(mkt.get(c) == "上櫃" for c in st)
+                star = ("★權值股＝上市市值前50＋上櫃市值前10" if data.get("stars_ok")
+                        else f"★權值股：官方收盤價部分暫缺（上市{tw}/50、上櫃{tp}/10），本次僅標已取得者")
                 body["contents"].append({"type": "text", "size": "xxs", "wrap": True, "color": pal["L"],
-                                         "text": "外本比／投本比＝外資／投信買賣超÷發行股數×100%｜當日｜近5日累計｜趨勢；"
-                                                 "數值紅正・綠負・黃0・灰缺；★權值股＝上市市值前50＋上櫃市值前10"})
+                                         "text": day + "外本比／投本比＝外資／投信買賣超÷發行股數×100%｜當日｜近5日累計｜趨勢；"
+                                                 "數值紅正・綠負・黃0・灰缺；" + star})
         except Exception as exc:
             print(f"[RK_R3_SUMMARY_ERR] {type(exc).__name__}: {str(exc)[:160]}", flush=True)
         return bubble
@@ -136,7 +151,7 @@ try:
     _v9663_stock_bubble = _rkr3_stock_bubble
     if callable(_RKR3_PREV_SUMMARY):
         _v9663_summary_bubble = _rkr3_summary_bubble
-    print("[RK_R3_INIT] ranking cards: 外本比/投本比/★", flush=True)
+    print("[RK_R3_INIT] RK_R3b ranking cards: 外本比/投本比/★ + 法人資料日", flush=True)
 except Exception as _rkr3_init_error:
     print(f"[RK_R3_INIT_ERR] {type(_rkr3_init_error).__name__}: {str(_rkr3_init_error)[:200]}", flush=True)
 '''
