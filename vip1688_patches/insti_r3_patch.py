@@ -14,8 +14,8 @@ _R3_SHARES = {"day": None, "data": {}}
 _R3_DAYS = {}
 _R3_PREV = {}
 _R3_LOCK = threading.Lock()
-_R3_DARK = {1: "#FF7A7A", -1: "#5FD38D", 0: "#F5C518", None: "#9A9A9A"}
-_R3_LIGHT = {1: "#B3261E", -1: "#1B6B3A", 0: "#7A5C00", None: "#5F5F5F"}
+_R3_DARK = {1: "#FF7A7A", -1: "#5FD38D", 0: "#F5C518", None: "#9A9A9A", "L": "#B9B7B2"}
+_R3_LIGHT = {1: "#B3261E", -1: "#1B6B3A", 0: "#7A5C00", None: "#5F5F5F", "L": "#504C46"}
 
 
 def _r3_shares():
@@ -113,15 +113,18 @@ def _r3_history(snapshot, budget=25):
 
 def _r3_pct(v):
     """小於 0.0005% 的非零值不顯示成 ±0.000%（避免看似為 0）。"""
-    if v and abs(v) < 0.0005:
+    if not v:
+        return "0.000%"
+    if abs(v) < 0.0005:
         return ("+" if v > 0 else "-") + "<0.001%"
     return f"{v:+.3f}%"
 
 
 def _r3_lines(code, hist, issued):
-    """回傳 [(文字, 方向)]；方向依近N日累計：1正 -1負 0持平 None資料不足。"""
+    """回傳 [(純文字, [(片段, 方向)])]；每個數值依自身正負上色：1紅 -1綠 0黃 None灰 L中性。"""
     if not issued:
-        return [("外本比／投本比：資料不足（官方無發行股數，如ETF）", None)]
+        t = "外本比／投本比：資料不足（官方無發行股數，如ETF）"
+        return [(t, [(t, None)])]
     n = len(hist)
     out = []
     for label, i in (("外本比", 0), ("投本比", 1)):
@@ -137,14 +140,16 @@ def _r3_lines(code, hist, issued):
         if n < 2:
             trend = ""
         elif not s:
-            trend = "｜當日未進出"
+            trend = "當日未進出"
         elif k == 1:
-            trend = "｜轉買" if s > 0 else "｜轉賣"
+            trend = "轉買" if s > 0 else "轉賣"
         else:
-            trend = f"｜連{'買' if s > 0 else '賣'}{k}日" + ("+" if k == n else "")
-        text = (f"{label} {_r3_pct(nets[0] * 100 / issued)}｜{n}日 "
-                f"{_r3_pct(cum * 100 / issued)}{trend}")
-        out.append((text, (cum > 0) - (cum < 0)))
+            trend = f"連{'買' if s > 0 else '賣'}{k}日" + ("+" if k == n else "")
+        parts = [(f"{label} ", "L"), (_r3_pct(nets[0] * 100 / issued), s),
+                 (f"｜{n}日 ", "L"), (_r3_pct(cum * 100 / issued), (cum > 0) - (cum < 0))]
+        if trend:
+            parts += [("｜", "L"), (trend, s)]
+        out.append(("".join(x for x, _ in parts), parts))
     return out
 
 
@@ -171,9 +176,14 @@ def _r3_inject(snapshot, out):
                 issued = shares.get(row[1])
                 if not issued:
                     miss.append(row[1])
-                for text, sign in _r3_lines(row[1], hist, issued):
-                    el = {"type": "text", "text": text, "size": "9px",
-                          "color": pal[sign], "wrap": True}
+                for _text, parts in _r3_lines(row[1], hist, issued):
+                    spans = []
+                    for piece, sign in parts:
+                        if spans and spans[-1]["color"] == pal[sign]:
+                            spans[-1]["text"] += piece
+                        else:
+                            spans.append({"type": "span", "text": piece, "color": pal[sign]})
+                    el = {"type": "text", "size": "9px", "wrap": True, "contents": spans}
                     card["contents"].append(el)
                     added.append((card, el))
                 cards += 1
@@ -193,7 +203,7 @@ def _r3_inject(snapshot, out):
     days = [d for d, _ in hist]
     note = (f"\n外本比／投本比＝外資／投信買賣超÷發行股數×100%"
             f"\n格式：當日｜近{len(days)}日累計｜趨勢（連買/連賣N日、轉買/轉賣）"
-            f"\n累計區間：{days[-1]:%m/%d}～{days[0]:%m/%d}；字色依累計：紅正・綠負・黃0・灰缺")
+            f"\n累計區間：{days[-1]:%m/%d}～{days[0]:%m/%d}；數值與趨勢字色：紅正/買・綠負/賣・黃0・灰缺")
     if miss:
         note += (f"\n無官方發行股數 {len(miss)} 檔（如ETF，標資料不足）："
                  + "、".join(miss[:10]) + ("…" if len(miss) > 10 else ""))
@@ -232,7 +242,7 @@ def strip(o):
     for m in o[1:]:
         for b in m["contents"]["contents"]:
             for c in b["body"]["contents"]:
-                c["contents"] = [x for x in c["contents"] if not str(x.get("text", "")).startswith(("外本比", "投本比"))]
+                c["contents"] = [x for x in c["contents"] if not (x.get("type") == "text" and str(x.get("text") or (x.get("contents") or [{}])[0].get("text", "")).startswith(("外本比", "投本比")))]
     o[0]["text"] = o[0]["text"].split("\n外本比／投本比＝")[0] + ("\n籌碼紀錄不代表未來漲跌，投資請審慎評估。" if "\n籌碼紀錄不代表" in o[0]["text"] else "")
     return o
 s = strip(out)
