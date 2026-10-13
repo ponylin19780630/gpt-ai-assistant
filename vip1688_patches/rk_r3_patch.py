@@ -46,11 +46,11 @@ try:
                         stars = _rkr3_q._r3_star_set(shares)
                     except Exception as exc:
                         print(f"[RK_R3_STAR_ERR] {type(exc).__name__}: {str(exc)[:120]}", flush=True)
-                    if len(stars) >= 60:
+                    if len(stars) >= 50:
                         break
                 data = {"hist": ([(snap.day, day0)] + hist[1:]) if day0 else None, "day": snap.day,
-                        "shares": shares, "stars": stars, "stars_ok": len(stars) >= 60,
-                        "ok": bool(day0) and len(stars) >= 60 and not ((getattr(_rkr3_q, "_R3_SHARES", {}) or {}).get("fail")),
+                        "shares": shares, "stars": stars, "stars_ok": len(stars) >= 50,
+                        "ok": bool(day0) and len(stars) >= 50 and not ((getattr(_rkr3_q, "_R3_SHARES", {}) or {}).get("fail")),
                         "why": "" if day0 else "當日全市場法人資料暫缺"}
                 print(f"[RK_R3_DATA] day={snap.day} days={len(hist)} day0_rows={len(day0 or {})} "
                       f"shares={len(shares)} stars={len(stars)} ms={int((_rkr3_time.monotonic() - t0) * 1000)}", flush=True)
@@ -136,11 +136,9 @@ try:
                 pal = _rkr3_q._R3_DARK if _rkr3_dark(bubble) else _rkr3_q._R3_LIGHT
                 data = _rkr3_data() or {}
                 day = f"法人資料日 {data['day']:%m/%d}（官方最新完整報表）｜" if data.get("day") else "法人資料暫缺｜"
-                mkt = (getattr(_rkr3_q, "_R3_SHARES", {}) or {}).get("mkt") or {}
                 st = data.get("stars") or set()
-                tw, tp = sum(mkt.get(c) == "上市" for c in st), sum(mkt.get(c) == "上櫃" for c in st)
-                star = ("★權值股＝上市市值前50＋上櫃市值前10" if data.get("stars_ok")
-                        else f"★權值股：官方收盤價部分暫缺（上市{tw}/50、上櫃{tp}/10），本次僅標已取得者")
+                star = ("★權值股＝上市市值前50" if data.get("stars_ok")
+                        else f"★權值股：上市收盤價暫缺（{len(st)}/50），本次僅標已取得者")
                 body["contents"].append({"type": "text", "size": "xxs", "wrap": True, "color": pal["L"],
                                          "text": day + "外本比／投本比＝外資／投信買賣超÷發行股數×100%｜當日｜近5日累計｜趨勢；"
                                                  "數值紅正・綠負・黃0・灰缺；" + star})
@@ -151,7 +149,7 @@ try:
     _v9663_stock_bubble = _rkr3_stock_bubble
     if callable(_RKR3_PREV_SUMMARY):
         _v9663_summary_bubble = _rkr3_summary_bubble
-    print("[RK_R3_INIT] RK_R3b ranking cards: 外本比/投本比/★ + 法人資料日", flush=True)
+    print("[RK_R3_INIT] RK_R3h ranking cards: 外本比/投本比/★上市前50 + 法人資料日", flush=True)
 except Exception as _rkr3_init_error:
     print(f"[RK_R3_INIT_ERR] {type(_rkr3_init_error).__name__}: {str(_rkr3_init_error)[:200]}", flush=True)
 '''

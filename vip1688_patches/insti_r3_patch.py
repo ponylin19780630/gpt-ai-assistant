@@ -72,51 +72,16 @@ def _r3_shares():
     return out
 
 
-def _r3_tpex_close_fallback(price):
-    """R3g 上櫃收盤價備援：TPEx 每日收盤行情（三大法人模組 fetch_quotes 已驗證的同一官方來源），由近而遠找最近有資料的交易日。"""
-    today = dt.datetime.now(TAIPEI).date()
-    for k in range(7):
-        d = today - dt.timedelta(days=k)
-        if d.weekday() >= 5:
-            continue
-        try:
-            payload = _requests.get("https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes",
-                                    params={"date": d.strftime("%Y/%m/%d"), "response": "json"},
-                                    headers={"User-Agent": "Mozilla/5.0"}, timeout=20).json()
-        except Exception as exc:
-            print(f"[INSTI_R3_PRICE_ERR] src=dailyQuotes date={d} {type(exc).__name__}: {str(exc)[:80]}", flush=True)
-            continue
-        n = 0
-        for tb in (payload.get("tables") or []) if isinstance(payload, dict) else []:
-            f = tb.get("fields") or [] if isinstance(tb, dict) else []
-            if "代號" not in f or "收盤" not in f:
-                continue
-            i, j = f.index("代號"), f.index("收盤")
-            for r in tb.get("data") or []:
-                if not isinstance(r, list) or len(r) <= max(i, j):
-                    continue
-                p = _price(r[j]) if isinstance(r[j], str) else None
-                code = str(r[i]).strip()
-                if code and p is not None and p > 0:
-                    price.setdefault(code, float(p))
-                    n += 1
-        print(f"[INSTI_R3_PRICE] src=dailyQuotes_fallback date={d} n={n}", flush=True)
-        if n:
-            return n
-    return 0
-
-
 def _r3_star_set(shares):
-    """★權值股＝上市市值前50＋上櫃市值前10（官方發行股數×官方最近收盤價），台北同日快取。"""
+    """★權值股＝上市市值前50（官方發行股數×官方最近收盤價），台北同日快取。R3h：不再抓上櫃收盤價。"""
     day = dt.datetime.now(TAIPEI).date()
     if _R3_STAR["day"] == day and _R3_STAR["set"]:
         return _R3_STAR["set"]
     mkt, price = _R3_SHARES.get("mkt") or {}, {}
-    for url in ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
-                "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"):
+    for url in ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",):
         name = url.rsplit("/", 1)[-1]
         try:
-            rows = _r3_json(url, 1 if "tpex" in url else 2)
+            rows = _r3_json(url)
             n = 0
             for r in rows if isinstance(rows, list) else []:
                 k = ({str(a).strip(): v for a, v in r.items()}
@@ -133,18 +98,14 @@ def _r3_star_set(shares):
         except Exception as exc:
             print(f"[INSTI_R3_PRICE_ERR] src={name} {type(exc).__name__}: "
                   f"{str(exc)[:100]}", flush=True)
-    if not any(mkt.get(c) == "上櫃" for c in price):
-        _r3_tpex_close_fallback(price)
     caps = {}
     for code, sh in shares.items():
-        if code in price and code in mkt:
+        if code in price and mkt.get(code) == "上市":
             caps.setdefault(mkt[code], []).append((sh * price[code], code))
-    top = {m: [c for _, c in sorted(v, reverse=True)[:50 if m == "上市" else 10]]
-           for m, v in caps.items()}
-    stars = set(top.get("上市", [])) | set(top.get("上櫃", []))
-    print(f"[INSTI_R3_STAR] 上市={len(top.get('上市', []))} 上櫃={len(top.get('上櫃', []))} "
-          f"上市前5={top.get('上市', [])[:5]} 上櫃前5={top.get('上櫃', [])[:5]}", flush=True)
-    if len(top.get("上市", [])) == 50 and len(top.get("上櫃", [])) == 10:
+    top = {m: [c for _, c in sorted(v, reverse=True)[:50]] for m, v in caps.items()}
+    stars = set(top.get("上市", []))
+    print(f"[INSTI_R3_STAR] 上市={len(stars)} 前5={top.get('上市', [])[:5]}", flush=True)
+    if len(stars) == 50:
         _R3_STAR.update(day=day, set=stars, top=top)
     return stars
 
@@ -313,10 +274,8 @@ def _r3_inject(snapshot, out):
     note = (f"\n外本比／投本比＝外資／投信買賣超÷發行股數×100%"
             f"\n格式：當日｜近{len(days)}日累計｜趨勢（連買/連賣N日、轉買/轉賣）"
             f"\n累計區間：{days[-1]:%m/%d}～{days[0]:%m/%d}；數值與趨勢字色：紅正/買・綠負/賣・黃0・灰缺")
-    mk = _R3_SHARES.get("mkt") or {}
-    tw, tp = sum(mk.get(c) == "上市" for c in stars), sum(mk.get(c) == "上櫃" for c in stars)
-    note += ("\n★權值股＝上市市值前50＋上櫃市值前10（發行股數×最近收盤價）" if tw == 50 and tp == 10
-             else f"\n★權值股：官方收盤價部分暫缺（上市{tw}/50、上櫃{tp}/10），本次僅標已取得者")
+    note += ("\n★權值股＝上市市值前50（發行股數×最近收盤價）" if len(stars) == 50
+             else f"\n★權值股：上市收盤價暫缺（{len(stars)}/50），本次僅標已取得者")
     if miss:
         fl = _R3_SHARES.get("fail") or set()
         note += ((f"\n{'、'.join(sorted(fl))}官方發行股數來源暫缺，{len(miss)} 檔標資料不足："
