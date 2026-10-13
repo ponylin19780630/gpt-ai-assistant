@@ -43,7 +43,9 @@
 1. TPEx `tpex_mainboard_daily_close_quotes` 在 10/13 16:15～16:37 持續逾時或斷線（ChunkedEncodingError、Read timed out）→ 因此放棄上櫃★，R3h 已完全不呼叫這支 API。
 2. 冷啟動時，新增欄位需要抓 4 個前交易日的全市場法人資料、發行股數和收盤價（排行榜約 9～24 秒）；之後走快取（2～6 秒）。
 3. 卡片大小：三大法人同買 carousel 47,197／50,000 bytes，餘裕不多。超過上限時會自動移除新增列並記錄 `INSTI_R3_SIZE_DROP`。
-4. Cloud Shell HOME 使用率 95%（剩約 276M）。只刪了 5 份經過「整個目錄內容逐檔比對」確認完全相同的重複目錄，其餘不同版本沒有動。
+4. r3h 上線後日誌（09:04 UTC）仍看得到 `[TW_R4_HTTP] act=tpex_breaker_open_10min_mkt path=/openapi/v1/tpex_mainboard_daily_close_quotes`：這是 app.py 既有的 TW_R4 熔斷層（屬於其他模組的上櫃行情抓取），**不是 R3h**，R3h 的 insti_query_r1.py 已經不含這支 API。代表這支 TPEx API 仍不穩定，熔斷機制已啟動。本次沒有改動那個模組。
+5. r3h 首次推播的三大法人 `cards=60 miss=10`：有 10 檔沒有發行股數，卡片標灰色「資料不足」，代號列在 LINE 摘要中。當時乾跑 `FAIL []`，推論是 ETF；正式環境那一次沒有印出 FAIL，**所以未逐檔驗證**。
+6. Cloud Shell HOME 使用率 95%（剩約 276M）。只刪了 5 份經過「整個目錄內容逐檔比對」確認完全相同的重複目錄，其餘不同版本沒有動。
 
 ## 5. 監控日誌關鍵字
 
