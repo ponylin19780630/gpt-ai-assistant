@@ -111,6 +111,13 @@ def _r3_history(snapshot, budget=25):
     return hist
 
 
+def _r3_pct(v):
+    """小於 0.0005% 的非零值不顯示成 ±0.000%（避免看似為 0）。"""
+    if v and abs(v) < 0.0005:
+        return ("+" if v > 0 else "-") + "<0.001%"
+    return f"{v:+.3f}%"
+
+
 def _r3_lines(code, hist, issued):
     """回傳 [(文字, 方向)]；方向依近N日累計：1正 -1負 0持平 None資料不足。"""
     if not issued:
@@ -135,8 +142,8 @@ def _r3_lines(code, hist, issued):
             trend = "｜轉買" if s > 0 else "｜轉賣"
         else:
             trend = f"｜連{'買' if s > 0 else '賣'}{k}日" + ("+" if k == n else "")
-        text = (f"{label} {nets[0] * 100 / issued:+.3f}%｜{n}日 "
-                f"{cum * 100 / issued:+.3f}%{trend}")
+        text = (f"{label} {_r3_pct(nets[0] * 100 / issued)}｜{n}日 "
+                f"{_r3_pct(cum * 100 / issued)}{trend}")
         out.append((text, (cum > 0) - (cum < 0)))
     return out
 
@@ -235,18 +242,18 @@ rows = list(snap.buy[:30]) + list(snap.sell[:30])
 mx = {}
 for r in rows:
     if r[1] in sh:
-        v = abs(r[3]) * 100 / sh[r[1]]
-        mx[r[0]] = max(mx.get(r[0], (0, ""))[0], v), r[1]
+        mx.setdefault(r[0], []).append((round(r[3] * 100 / sh[r[1]], 3), r[1], r[2]))
+mx = {k: sorted(v, key=lambda x: -abs(x[0]))[:3] for k, v in mx.items()}
 print("ORIGINAL_UNCHANGED", same)
 print("CARD_LAYOUT", out[1]["contents"]["contents"][0]["body"]["contents"][0].get("layout"))
 print("SHARES_SAMPLE", {c: sh.get(c) for c in ("2330", "2317", "6488", "8299", "3105")})
-print("MAX_ABS_FOREIGN_DAY_RATIO_BY_MARKET", mx)
+print("TOP3_ABS_FOREIGN_DAY_RATIO_BY_MARKET", mx)
 hist = q._r3_history(snap)
 print("HIST_DAYS", [str(d) for d, _ in hist])
 for r in [x for x in snap.buy[:3]] + [x for x in snap.sell[:3]]:
     print("ROW", r[0], r[1], r[2], "外", int(r[3] / 1000), "投", int(r[4] / 1000), "發行股", sh.get(r[1]), [x for x, _ in q._r3_lines(r[1], hist, sh.get(r[1]))])
 print("SUMMARY_TEXT_BEGIN"); print(out[0]["text"]); print("SUMMARY_TEXT_END")
-open("insti_r3_dry.json", "w", encoding="utf-8").write(json.dumps(out, ensure_ascii=False, indent=1))
+open(__import__("os").path.expanduser("~/insti_r3_dry.json"), "w", encoding="utf-8").write(json.dumps(out, ensure_ascii=False, indent=1))
 '''
 
 
@@ -288,7 +295,7 @@ def main():
     r = subprocess.run([sys.executable, "-B", "-c", PROBE], cwd=cand, capture_output=True, text=True, timeout=300)
     print(r.stdout[-6000:])
     print(r.stderr[-3000:])
-    print(f"[R3_DRY] exit={r.returncode} json={os.path.join(cand, 'insti_r3_dry.json')}")
+    print(f"[R3_DRY] exit={r.returncode} json=~/insti_r3_dry.json")
 
 
 if __name__ == "__main__":
